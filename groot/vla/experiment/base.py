@@ -568,8 +568,9 @@ class BaseTrainer(transformers.Trainer):
             "collate_fn": data_collator,
             "num_workers": self.args.dataloader_num_workers,
             "pin_memory": self.args.dataloader_pin_memory,
-            "persistent_workers": self.args.dataloader_persistent_workers,
         }
+        if self.args.dataloader_num_workers > 0:
+            dataloader_params["persistent_workers"] = self.args.dataloader_persistent_workers
 
         return DataLoader(train_dataset, **dataloader_params)
 
@@ -697,6 +698,17 @@ class BaseExperiment(ABC):
             import json, gc
             from safetensors.torch import load_file
 
+            def ensure_real_safetensors_file(path: str):
+                # Hugging Face git clones without git-lfs leave tiny pointer files behind.
+                with open(path, "rb") as f:
+                    header = f.read(200)
+                if header.startswith(b"version https://git-lfs.github.com/spec/v1"):
+                    raise RuntimeError(
+                        f"Checkpoint shard is a Git LFS pointer, not real weights: {path}\n"
+                        f"Download the actual checkpoint files, for example:\n"
+                        f"  hf download GEAR-Dreams/DreamZero-AgiBot --repo-type model --local-dir {cfg.pretrained_model_path}"
+                    )
+
             ckpt_dir = cfg.pretrained_model_path
             safetensors_index_path = os.path.join(ckpt_dir, "model.safetensors.index.json")
             safetensors_path = os.path.join(ckpt_dir, "model.safetensors")
@@ -707,11 +719,13 @@ class BaseExperiment(ABC):
                 for shard_file in sorted(set(index["weight_map"].values())):
                     shard_path = os.path.join(ckpt_dir, shard_file)
                     mprint(f"Loading shard: {shard_path}")
+                    ensure_real_safetensors_file(shard_path)
                     shard_state_dict = load_file(shard_path)
                     model.load_state_dict(shard_state_dict, strict=False)
                     del shard_state_dict
                     gc.collect()
             elif os.path.exists(safetensors_path):
+                ensure_real_safetensors_file(safetensors_path)
                 state_dict = load_file(safetensors_path)
                 model.load_state_dict(state_dict, strict=False)
             else:

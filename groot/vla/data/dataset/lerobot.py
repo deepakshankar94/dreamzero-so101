@@ -190,6 +190,7 @@ class LeRobotSingleDataset(Dataset):
         self._lerobot_info_meta = self._get_lerobot_info_meta()
         # Notice: We also include discarded trajectories in stats for larger state coverage, for questions please ask @Fengyuan Hu @Yuqi Xie
         self._lerobot_stats_meta = self._get_lerobot_stats_meta()
+        self._episode_metadata = self._load_episode_metadata()
         
         # Initialize trajectory info and chunk size early (needed for relative stats calculation)
         self._trajectory_ids, self._trajectory_lengths = self._get_trajectories()
@@ -959,16 +960,7 @@ class LeRobotSingleDataset(Dataset):
             pd.DataFrame or None if loading fails.
         """
         try:
-            chunk_index = traj_id // self.chunk_size
-            parquet_path = self.dataset_path / f"data/chunk-{chunk_index:03d}/episode_{traj_id:06d}.parquet"
-            if not parquet_path.exists():
-                # Try alternative pattern
-                parquet_files = list(self.dataset_path.glob(f"data/*/episode_{traj_id:06d}.parquet"))
-                if parquet_files:
-                    parquet_path = parquet_files[0]
-                else:
-                    return None
-            return pd.read_parquet(parquet_path)
+            return self.get_trajectory_data(traj_id)
         except Exception:
             return None
 
@@ -1119,15 +1111,22 @@ class LeRobotSingleDataset(Dataset):
 
         return metadata
 
-    def _get_trajectories(self) -> tuple[np.ndarray, np.ndarray]:
-        """Get the trajectories in the dataset."""
-        # Get trajectory lengths, IDs, and whitelist from dataset metadata
+    def _load_episode_metadata(self) -> dict[int, dict]:
+        """Load episode metadata indexed by episode_index."""
         episode_path = self.dataset_path / LE_ROBOT_EPISODE_FILENAME
         with open(episode_path, "r") as f:
             episode_metadata = [json.loads(line) for line in f]
+        return {int(episode["episode_index"]): episode for episode in episode_metadata}
+
+    def _get_episode_metadata(self, trajectory_id: int) -> dict:
+        """Get raw episode metadata for a trajectory."""
+        return self._episode_metadata.get(int(trajectory_id), {})
+
+    def _get_trajectories(self) -> tuple[np.ndarray, np.ndarray]:
+        """Get the trajectories in the dataset."""
         trajectory_ids = []
         trajectory_lengths = []
-        for episode in episode_metadata:
+        for episode in self._episode_metadata.values():
             trajectory_ids.append(episode["episode_index"])
             trajectory_lengths.append(episode["length"])
         return np.array(trajectory_ids), np.array(trajectory_lengths)
@@ -1332,9 +1331,14 @@ class LeRobotSingleDataset(Dataset):
 
     def get_parquet_path(self, trajectory_id: int) -> Path:
         """Get the parquet path for a trajectory."""
+        episode_metadata = self._get_episode_metadata(trajectory_id)
         chunk_index = self.get_episode_chunk(trajectory_id)
+        file_index = episode_metadata.get("data/file_index", trajectory_id)
         return self.dataset_path / self.data_path_pattern.format(
-            episode_chunk=chunk_index, episode_index=trajectory_id
+            episode_chunk=chunk_index,
+            episode_index=trajectory_id,
+            chunk_index=chunk_index,
+            file_index=int(file_index),
         )
 
     def get_trajectory_data(self, trajectory_id: int) -> pd.DataFrame:
@@ -1344,7 +1348,15 @@ class LeRobotSingleDataset(Dataset):
         else:
             parquet_path = self.get_parquet_path(trajectory_id)
             assert parquet_path.exists(), f"Parquet file not found at {parquet_path}"
-            return pd.read_parquet(parquet_path)
+            traj_data = pd.read_parquet(parquet_path)
+            episode_metadata = self._get_episode_metadata(trajectory_id)
+            start = episode_metadata.get("dataset_from_index")
+            end = episode_metadata.get("dataset_to_index")
+            if start is not None or end is not None:
+                start = 0 if start is None else int(start)
+                end = len(traj_data) if end is None else int(end)
+                traj_data = traj_data.iloc[start:end].reset_index(drop=True)
+            return traj_data
 
     def get_trajectory_index(self, trajectory_id: int) -> int:
         """Get the index of the trajectory in the dataset by the trajectory ID.
@@ -1365,6 +1377,9 @@ class LeRobotSingleDataset(Dataset):
 
     def get_episode_chunk(self, ep_index: int) -> int:
         """Get the chunk index for an episode index."""
+        episode_metadata = self._get_episode_metadata(ep_index)
+        if "data/chunk_index" in episode_metadata:
+            return int(episode_metadata["data/chunk_index"])
         return ep_index // self.chunk_size
 
     def retrieve_data_and_pad(
@@ -1429,12 +1444,19 @@ class LeRobotSingleDataset(Dataset):
         Returns:
             Path: Path to the video file.
         """
+        episode_metadata = self._get_episode_metadata(trajectory_id)
         chunk_index = self.get_episode_chunk(trajectory_id)
         original_key = self.lerobot_modality_meta.video[key].original_key
         if original_key is None:
             original_key = key
+        video_chunk_index = int(episode_metadata.get(f"videos/{original_key}/chunk_index", chunk_index))
+        video_file_index = int(episode_metadata.get(f"videos/{original_key}/file_index", trajectory_id))
         video_filename = self.video_path_pattern.format(
-            episode_chunk=chunk_index, episode_index=trajectory_id, video_key=original_key
+            episode_chunk=video_chunk_index,
+            episode_index=trajectory_id,
+            video_key=original_key,
+            chunk_index=video_chunk_index,
+            file_index=video_file_index,
         )
         return self.dataset_path / video_filename
 
@@ -1472,6 +1494,13 @@ class LeRobotSingleDataset(Dataset):
         timestamp: np.ndarray = self.curr_traj_data["timestamp"].to_numpy()
         # Get the corresponding video timestamps from the step indices
         video_timestamp = timestamp[step_indices]
+        original_key = self.lerobot_modality_meta.video[key].original_key
+        if original_key is None:
+            original_key = key
+        episode_metadata = self._get_episode_metadata(trajectory_id)
+        video_start_timestamp = episode_metadata.get(f"videos/{original_key}/from_timestamp")
+        if video_start_timestamp is not None:
+            video_timestamp = video_timestamp + float(video_start_timestamp)
 
         # try:
         return get_frames_by_timestamps(

@@ -23,6 +23,35 @@ __all__ = [
 ]
 
 
+def _resolve_flash_attention_version(version):
+    if version in (2, 3):
+        return version
+
+    requested_backend = os.getenv("ATTENTION_BACKEND")
+    if requested_backend == "FA2":
+        if FLASH_ATTN_2_AVAILABLE:
+            return 2
+        if FLASH_ATTN_3_AVAILABLE:
+            warnings.warn("ATTENTION_BACKEND=FA2 requested, but FA2 is unavailable. Falling back to FA3.")
+            return 3
+        return None
+
+    if requested_backend == "FA3":
+        if FLASH_ATTN_3_AVAILABLE:
+            return 3
+        if FLASH_ATTN_2_AVAILABLE:
+            warnings.warn("ATTENTION_BACKEND=FA3 requested, but FA3 is unavailable. Falling back to FA2.")
+            return 2
+        return None
+
+    # Prefer FA2 by default for compatibility when both are installed.
+    if FLASH_ATTN_2_AVAILABLE:
+        return 2
+    if FLASH_ATTN_3_AVAILABLE:
+        return 3
+    return None
+
+
 def flash_attention(
     q,
     k,
@@ -87,10 +116,13 @@ def flash_attention(
     if q_scale is not None:
         q = q * q_scale
 
-    if version is not None and version == 3 and not FLASH_ATTN_3_AVAILABLE:
+    version = _resolve_flash_attention_version(version)
+
+    if version == 3 and not FLASH_ATTN_3_AVAILABLE:
         warnings.warn(
             'Flash attention 3 is not available, use flash attention 2 instead.'
         )
+        version = 2 if FLASH_ATTN_2_AVAILABLE else None
 
     # Check for TensorRT at runtime, not import time
     if os.getenv("ENABLE_TENSORRT", "False").lower() == "true":
@@ -115,7 +147,7 @@ def flash_attention(
         out = out.transpose(1, 2).contiguous()
         return out
 
-    elif (version is None or version == 3) and FLASH_ATTN_3_AVAILABLE:
+    elif version == 3 and FLASH_ATTN_3_AVAILABLE:
         # Note: dropout_p, window_size are not supported in FA3 now.
         x = flash_attn_interface.flash_attn_varlen_func(
             q=q,
@@ -131,9 +163,11 @@ def flash_attention(
             max_seqlen_k=lk,
             softmax_scale=softmax_scale,
             causal=causal,
-            deterministic=deterministic)[0].unflatten(0, (b, lq))
-    else:
-        assert FLASH_ATTN_2_AVAILABLE
+            deterministic=deterministic)
+        if isinstance(x, tuple):
+            x = x[0]
+        x = x.unflatten(0, (b, lq))
+    elif version == 2 and FLASH_ATTN_2_AVAILABLE:
         x = flash_attn.flash_attn_varlen_func(
             q=q,
             k=k,
@@ -149,6 +183,14 @@ def flash_attention(
             causal=causal,
             window_size=window_size,
             deterministic=deterministic).unflatten(0, (b, lq))
+    else:
+        q = q.unflatten(0, (b, lq)).transpose(1, 2).to(dtype)
+        k = k.unflatten(0, (b, lk)).transpose(1, 2).to(dtype)
+        v = v.unflatten(0, (b, lk)).transpose(1, 2).to(dtype)
+        x = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask=None, is_causal=causal, dropout_p=dropout_p
+        )
+        x = x.transpose(1, 2).contiguous()
 
     # output
     return x.type(out_dtype)

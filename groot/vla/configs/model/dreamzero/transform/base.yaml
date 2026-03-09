@@ -34,6 +34,7 @@ embodiment_tag_to_projector_index:
   dream: 31
   yam: 32
   xdof: 22
+  high_camera_updated: 22
   gr1_unified_segmentation: 14
   language_table_sim: 7
   gr1_isaac: 0

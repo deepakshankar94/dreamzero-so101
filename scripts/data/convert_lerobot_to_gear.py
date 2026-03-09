@@ -65,6 +65,7 @@ VALID_EMBODIMENT_TAGS = [
     "dream", "yam", "xdof",
     "gr1_unified_segmentation", "language_table_sim", "gr1_isaac",
     "sim_behavior_r1_pro", "mecka_hands", "real_r1_pro_sharpa",
+    "high_camera_updated",
 ]
 
 
@@ -81,17 +82,166 @@ def load_info(dataset_path: Path) -> dict:
         return json.load(f)
 
 
-def get_parquet_paths(dataset_path: Path, info: dict) -> list[Path]:
+def _to_python(value):
+    if isinstance(value, dict):
+        return {key: _to_python(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_python(val) for val in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return _to_python(value.tolist())
+    return value
+
+
+def _normalize_task_list(raw_tasks) -> list[str]:
+    if raw_tasks is None:
+        return []
+    if isinstance(raw_tasks, np.ndarray):
+        raw_tasks = raw_tasks.tolist()
+    if isinstance(raw_tasks, (list, tuple)):
+        tasks = []
+        for task in raw_tasks:
+            task = _to_python(task)
+            if task is None or (isinstance(task, float) and pd.isna(task)):
+                continue
+            text = str(task).strip()
+            if text:
+                tasks.append(text)
+        return tasks
+    if isinstance(raw_tasks, float) and pd.isna(raw_tasks):
+        return []
+    text = str(raw_tasks).strip()
+    return [text] if text else []
+
+
+def load_tasks_from_parquet(dataset_path: Path) -> list[dict] | None:
+    tasks_path = dataset_path / "meta" / "tasks.parquet"
+    if not tasks_path.exists():
+        return None
+
+    df = pd.read_parquet(tasks_path).reset_index()
+    if "task_index" not in df.columns:
+        log.warning("meta/tasks.parquet found, but no task_index column is present")
+        return None
+
+    if "task" in df.columns:
+        task_column = "task"
+    elif "index" in df.columns:
+        task_column = "index"
+    else:
+        candidate_columns = [col for col in df.columns if col != "task_index"]
+        if not candidate_columns:
+            log.warning("meta/tasks.parquet found, but no task text column is present")
+            return None
+        task_column = candidate_columns[0]
+
+    tasks = []
+    for row in df.to_dict(orient="records"):
+        task_index = int(_to_python(row["task_index"]))
+        task_text = str(_to_python(row[task_column])).strip()
+        tasks.append({"task_index": task_index, "task": task_text})
+
+    return sorted(tasks, key=lambda task: task["task_index"])
+
+
+def load_episode_rows(dataset_path: Path) -> list[dict]:
+    episodes_dir = dataset_path / "meta" / "episodes"
+    if not episodes_dir.exists():
+        return []
+
+    rows: list[dict] = []
+    for episode_file in sorted(episodes_dir.rglob("*.parquet")):
+        df = pd.read_parquet(episode_file)
+        for row in df.to_dict(orient="records"):
+            normalized = {key: _to_python(value) for key, value in row.items()}
+            if "tasks" in normalized:
+                normalized["tasks"] = _normalize_task_list(normalized["tasks"])
+            rows.append(normalized)
+
+    return sorted(rows, key=lambda row: int(row["episode_index"]))
+
+
+def resolve_data_parquet_path(
+    dataset_path: Path,
+    info: dict,
+    episode_index: int,
+    episode_row: dict | None = None,
+) -> Path:
     pattern = info.get("data_path", "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet")
+    default_chunk_index = episode_index // info.get("chunks_size", 1000)
+    format_kwargs = {
+        "episode_chunk": default_chunk_index,
+        "episode_index": episode_index,
+        "chunk_index": default_chunk_index,
+        "file_index": episode_index,
+    }
+    if episode_row is not None:
+        format_kwargs["chunk_index"] = int(episode_row.get("data/chunk_index", default_chunk_index))
+        format_kwargs["file_index"] = int(episode_row.get("data/file_index", episode_index))
+    return dataset_path / pattern.format(**format_kwargs)
+
+
+def get_episode_records(dataset_path: Path, info: dict) -> list[dict]:
+    episode_rows = load_episode_rows(dataset_path)
+    if episode_rows:
+        records = []
+        for row in episode_rows:
+            episode_index = int(row["episode_index"])
+            dataset_from_index = row.get("dataset_from_index")
+            dataset_to_index = row.get("dataset_to_index")
+            if dataset_from_index is not None:
+                dataset_from_index = int(dataset_from_index)
+            if dataset_to_index is not None:
+                dataset_to_index = int(dataset_to_index)
+
+            length = row.get("length")
+            if length is None and dataset_from_index is not None and dataset_to_index is not None:
+                length = dataset_to_index - dataset_from_index
+            if length is not None:
+                length = int(length)
+
+            records.append(
+                {
+                    "episode_index": episode_index,
+                    "parquet_path": resolve_data_parquet_path(dataset_path, info, episode_index, row),
+                    "dataset_from_index": dataset_from_index,
+                    "dataset_to_index": dataset_to_index,
+                    "length": length,
+                    "tasks": _normalize_task_list(row.get("tasks")),
+                    "metadata": row,
+                }
+            )
+        return records
+
     total_episodes = info["total_episodes"]
-    chunks_size = info.get("chunks_size", 1000)
-    paths = []
-    for ep_idx in range(total_episodes):
-        chunk_idx = ep_idx // chunks_size
-        p = dataset_path / pattern.format(episode_chunk=chunk_idx, episode_index=ep_idx)
-        if p.exists():
-            paths.append(p)
-    return sorted(paths)
+    records = []
+    for episode_index in range(total_episodes):
+        parquet_path = resolve_data_parquet_path(dataset_path, info, episode_index)
+        if parquet_path.exists():
+            records.append(
+                {
+                    "episode_index": episode_index,
+                    "parquet_path": parquet_path,
+                    "dataset_from_index": None,
+                    "dataset_to_index": None,
+                    "length": None,
+                    "tasks": [],
+                    "metadata": {},
+                }
+            )
+    return records
+
+
+def load_episode_dataframe(episode_record: dict) -> pd.DataFrame:
+    df = pd.read_parquet(episode_record["parquet_path"])
+    start = episode_record.get("dataset_from_index")
+    end = episode_record.get("dataset_to_index")
+    if start is not None or end is not None:
+        start = 0 if start is None else int(start)
+        end = len(df) if end is None else int(end)
+        df = df.iloc[start:end]
+    return df.reset_index(drop=True)
 
 
 def detect_features(info: dict) -> dict:
@@ -218,11 +368,11 @@ def build_modality_json(
 # Stats computation
 # ---------------------------------------------------------------------------
 
-def compute_stats(parquet_paths: list[Path], columns: list[str]) -> dict:
+def compute_stats(episode_records: list[dict], columns: list[str]) -> dict:
     """Compute mean/std/min/max/q01/q99 for numeric columns across all episodes."""
     all_data: dict[str, list] = {col: [] for col in columns}
-    for pp in tqdm(parquet_paths, desc="Computing stats"):
-        df = pd.read_parquet(pp)
+    for episode_record in tqdm(episode_records, desc="Computing stats"):
+        df = load_episode_dataframe(episode_record)
         for col in columns:
             if col not in df.columns:
                 continue
@@ -248,7 +398,7 @@ def compute_stats(parquet_paths: list[Path], columns: list[str]) -> dict:
 
 
 def compute_relative_stats(
-    parquet_paths: list[Path],
+    episode_records: list[dict],
     modality: dict,
     relative_action_keys: list[str],
     action_horizon: int = 24,
@@ -275,8 +425,8 @@ def compute_relative_stats(
         state_meta = modality["state"][rel_key]
 
         all_relative = []
-        for pp in tqdm(parquet_paths, desc=f"Relative stats [{rel_key}]"):
-            df = pd.read_parquet(pp)
+        for episode_record in tqdm(episode_records, desc=f"Relative stats [{rel_key}]"):
+            df = load_episode_dataframe(episode_record)
             action_col = action_meta["original_key"]
             state_col = state_meta["original_key"]
             if action_col not in df.columns or state_col not in df.columns:
@@ -325,14 +475,18 @@ def compute_relative_stats(
 # Tasks & episodes
 # ---------------------------------------------------------------------------
 
-def build_tasks(parquet_paths: list[Path], task_key: str | None) -> list[dict]:
+def build_tasks(dataset_path: Path, episode_records: list[dict], task_key: str | None) -> list[dict]:
     """Build tasks.jsonl entries from the dataset."""
+    tasks_from_parquet = load_tasks_from_parquet(dataset_path)
+    if tasks_from_parquet:
+        return tasks_from_parquet
+
     if task_key is None:
         return [{"task_index": 0, "task": ""}]
 
     task_set: dict[str, int] = {}
-    for pp in tqdm(parquet_paths, desc="Extracting tasks"):
-        df = pd.read_parquet(pp)
+    for episode_record in tqdm(episode_records, desc="Extracting tasks"):
+        df = load_episode_dataframe(episode_record)
         if task_key not in df.columns:
             continue
         for val in df[task_key].unique():
@@ -346,29 +500,41 @@ def build_tasks(parquet_paths: list[Path], task_key: str | None) -> list[dict]:
     return [{"task_index": idx, "task": text} for text, idx in sorted(task_set.items(), key=lambda x: x[1])]
 
 
-def build_episodes(parquet_paths: list[Path], info: dict, task_key: str | None, tasks: list[dict]) -> list[dict]:
+def build_episodes(episode_records: list[dict], info: dict, task_key: str | None, tasks: list[dict]) -> list[dict]:
     """Build episodes.jsonl entries."""
     task_text_to_idx = {t["task"]: t["task_index"] for t in tasks}
+    task_idx_to_text = {t["task_index"]: t["task"] for t in tasks}
     episodes = []
-    for ep_idx, pp in enumerate(tqdm(parquet_paths, desc="Building episodes")):
-        df = pd.read_parquet(pp)
-        length = len(df)
+    for episode_record in tqdm(episode_records, desc="Building episodes"):
+        df = load_episode_dataframe(episode_record)
+        length = episode_record["length"] if episode_record["length"] is not None else len(df)
 
-        ep_tasks: list[str] = []
+        ep_tasks = _normalize_task_list(episode_record.get("tasks"))
         if task_key and task_key in df.columns:
             unique_tasks = df[task_key].unique()
             for t in unique_tasks:
-                text = str(t) if not isinstance(t, str) else t
+                task_value = _to_python(t)
+                if isinstance(task_value, str):
+                    text = task_value
+                else:
+                    text = task_idx_to_text.get(task_value, str(task_value))
                 if text and text in task_text_to_idx:
                     ep_tasks.append(text)
         if not ep_tasks:
             ep_tasks = [""]
 
-        episodes.append({
-            "episode_index": ep_idx,
+        episode_json = {
+            "episode_index": episode_record["episode_index"],
             "tasks": ep_tasks,
-            "length": length,
-        })
+            "length": int(length),
+        }
+        for key, value in episode_record["metadata"].items():
+            if key in episode_json:
+                continue
+            if key == "tasks":
+                continue
+            episode_json[key] = value
+        episodes.append(episode_json)
 
     return episodes
 
@@ -508,6 +674,9 @@ def main():
         if task_key is None:
             task_key = detected["annotation"][0]
         log.info("  Auto-detected task key: %s", task_key)
+    elif task_key is None and "task_index" in info.get("features", {}):
+        task_key = "task_index"
+        log.info("  Using task_index for language lookup via meta/tasks.parquet")
 
     # 2. Build modality.json
     modality = build_modality_json(info, detected, state_mapping, action_mapping, task_key)
@@ -532,11 +701,15 @@ def main():
         log.info("  Wrote embodiment.json (tag=%s)", args.embodiment_tag)
 
     # 4. Get parquet file paths
-    parquet_paths = get_parquet_paths(output_path, info)
-    if not parquet_paths:
+    episode_records = get_episode_records(output_path, info)
+    if not episode_records:
         log.error("No parquet files found. Check dataset structure.")
         sys.exit(1)
-    log.info("  Found %d parquet files", len(parquet_paths))
+    log.info(
+        "  Found %d episodes across %d parquet file(s)",
+        len(episode_records),
+        len({record["parquet_path"] for record in episode_records}),
+    )
 
     # 5. Compute stats.json
     stats_path = meta_dir / "stats.json"
@@ -548,7 +721,7 @@ def main():
         log.info("  stats.json already exists, skipping")
     else:
         log.info("  Computing dataset statistics...")
-        stats = compute_stats(parquet_paths, numeric_cols)
+        stats = compute_stats(episode_records, numeric_cols)
         with open(stats_path, "w") as f:
             json.dump(stats, f, indent=4)
         log.info("  Wrote stats.json (%d features)", len(stats))
@@ -561,7 +734,7 @@ def main():
         else:
             log.info("  Computing relative action statistics for keys: %s", args.relative_action_keys)
             rel_stats = compute_relative_stats(
-                parquet_paths, modality, args.relative_action_keys,
+                episode_records, modality, args.relative_action_keys,
                 action_horizon=args.action_horizon,
             )
             if rel_stats:
@@ -578,7 +751,7 @@ def main():
     if tasks_path.exists() and not args.force:
         log.info("  tasks.jsonl already exists, skipping")
     else:
-        tasks = build_tasks(parquet_paths, task_key)
+        tasks = build_tasks(output_path, episode_records, task_key)
         with open(tasks_path, "w") as f:
             for t in tasks:
                 f.write(json.dumps(t) + "\n")
@@ -596,7 +769,7 @@ def main():
                     tasks.append(json.loads(line.strip()))
         if not tasks:
             tasks = [{"task_index": 0, "task": ""}]
-        episodes = build_episodes(parquet_paths, info, task_key, tasks)
+        episodes = build_episodes(episode_records, info, task_key, tasks)
         with open(episodes_path, "w") as f:
             for ep in episodes:
                 f.write(json.dumps(ep) + "\n")

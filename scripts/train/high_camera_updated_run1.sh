@@ -1,0 +1,51 @@
+#!/bin/bash
+
+export HYDRA_FULL_ERROR=1
+export ATTENTION_BACKEND="${ATTENTION_BACKEND:-FA2}"
+
+torchrun --nproc_per_node 1 --standalone groot/vla/experiment/experiment.py \
+  report_to=none \
+  data=dreamzero/high_camera_updated_relative \
+  wandb_project=dreamzero \
+  train_architecture=lora \
+  num_frames=33 \
+  action_horizon=24 \
+  num_views=2 \
+  model=dreamzero/vla \
+  model/dreamzero/action_head=wan_flow_matching_action_tf \
+  model/dreamzero/transform=dreamzero_cotrain \
+  num_frame_per_block=2 \
+  num_action_per_block=24 \
+  num_state_per_block=1 \
+  seed=42 \
+  training_args.learning_rate=1e-5 \
+  training_args.deepspeed="groot/vla/configs/deepspeed/zero2.json" \
+  save_steps=1000 \
+  training_args.warmup_ratio=0.05 \
+  output_dir=/root/dreamzero/checkpoints/dreamzero_high_camera_updated_run1 \
+  per_device_train_batch_size=1 \
+  max_steps=10 \
+  weight_decay=1e-5 \
+  save_total_limit=5 \
+  upload_checkpoints=false \
+  bf16=true \
+  tf32=true \
+  eval_bf16=true \
+  dataloader_pin_memory=false \
+  dataloader_num_workers=0 \
+  dataloader_persistent_workers=false \
+  image_resolution_width=320 \
+  image_resolution_height=176 \
+  save_lora_only=true \
+  max_chunk_size=4 \
+  frame_seqlen=880 \
+  save_strategy=steps \
+  high_camera_updated_data_root=/root/dreamzero/data/high-camera-updated \
+  dit_version=./checkpoints/Wan2.1-I2V-14B-480P \
+  text_encoder_pretrained_path=./checkpoints/Wan2.1-I2V-14B-480P/models_t5_umt5-xxl-enc-bf16.pth \
+  image_encoder_pretrained_path=./checkpoints/Wan2.1-I2V-14B-480P/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth \
+  vae_pretrained_path=./checkpoints/Wan2.1-I2V-14B-480P/Wan2.1_VAE.pth \
+  tokenizer_path=./checkpoints/umt5-xxl \
+  pretrained_model_path=./checkpoints/DreamZero-AgiBot \
+  ++action_head_cfg.config.skip_component_loading=true \
+  ++action_head_cfg.config.defer_lora_injection=true

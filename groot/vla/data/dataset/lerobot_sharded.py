@@ -451,6 +451,8 @@ class ShardedLeRobotSubLangSingleActionChunkDatasetDROID(LeRobotSingleDataset):
         modality_keys: dict,
         video_paths: dict[int, dict[str, Path]],
         parquet_paths: dict[int, Path],
+        episode_metadata: dict[int, dict] | None = None,
+        video_original_keys: dict[str, str] | None = None,
         video_backend: str = "pyav",
         video_backend_kwargs: dict | None = None,
         fps: float = None,
@@ -465,10 +467,24 @@ class ShardedLeRobotSubLangSingleActionChunkDatasetDROID(LeRobotSingleDataset):
         trajectory_start_indices = {}
         curr_step_index = 0
         cached_df = None
+        parquet_cache: dict[Path, pd.DataFrame] = {}
+        episode_metadata = episode_metadata or {}
+        video_original_keys = video_original_keys or {}
         for trajectory_id in trajectory_ids:
             trajectory_start_indices[trajectory_id] = curr_step_index
             parquet_path = parquet_paths[trajectory_id]
-            parquet_df = pd.read_parquet(parquet_path)
+            if parquet_path not in parquet_cache:
+                parquet_cache[parquet_path] = pd.read_parquet(parquet_path)
+            parquet_df = parquet_cache[parquet_path]
+            trajectory_meta = episode_metadata.get(int(trajectory_id), {})
+            start_index = trajectory_meta.get("dataset_from_index")
+            end_index = trajectory_meta.get("dataset_to_index")
+            if start_index is not None or end_index is not None:
+                start_index = 0 if start_index is None else int(start_index)
+                end_index = len(parquet_df) if end_index is None else int(end_index)
+                parquet_df = parquet_df.iloc[start_index:end_index].reset_index(drop=True)
+            else:
+                parquet_df = parquet_df.reset_index(drop=True)
             # Check timestamps are in sync
             parquet_timestamps = parquet_df["timestamp"].to_numpy()
             trajectory_length = len(parquet_timestamps)
@@ -481,9 +497,14 @@ class ShardedLeRobotSubLangSingleActionChunkDatasetDROID(LeRobotSingleDataset):
                 assert key.startswith("video."), f"Video key must start with 'video.', got {key}"
                 if key not in cached_frames:
                     cached_frames[key] = []
+                original_key = video_original_keys.get(key, "observation.images." + key.replace("video.", ""))
+                video_start_timestamp = trajectory_meta.get(f"videos/{original_key}/from_timestamp")
+                load_timestamps = parquet_timestamps
+                if video_start_timestamp is not None:
+                    load_timestamps = parquet_timestamps + float(video_start_timestamp)
                 frames = get_frames_by_timestamps(
                     video_paths[trajectory_id][key].as_posix(),
-                    timestamps=parquet_timestamps,
+                    timestamps=load_timestamps,
                     video_backend=video_backend,
                     video_backend_kwargs=video_backend_kwargs,
                     fps=fps,
@@ -515,6 +536,14 @@ class ShardedLeRobotSubLangSingleActionChunkDatasetDROID(LeRobotSingleDataset):
             self.modality_keys,
             self.all_video_paths,
             self.all_parquet_paths,
+            self._episode_metadata,
+            {
+                key: (
+                    self.lerobot_modality_meta.video[key.replace("video.", "")].original_key
+                    or ("observation.images." + key.replace("video.", ""))
+                )
+                for key in self.modality_keys["video"]
+            },
             self.video_backend,
             self.video_backend_kwargs,
             self.fps,

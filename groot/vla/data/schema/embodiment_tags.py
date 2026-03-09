@@ -280,6 +280,11 @@ class EmbodimentTag(Enum):
     The XDOF data with conversions via jimmywu's processing pipeline.
     """
 
+    HIGH_CAMERA_UPDATED = "high_camera_updated"
+    """
+    A 2-camera single-arm dataset with overhead and arm views.
+    """
+
     SIM_BEHAVIOR_R1_PRO = "sim_behavior_r1_pro"
     """
     The sim BEHAVIOR Galaxea R1 Pro robot with grippers.

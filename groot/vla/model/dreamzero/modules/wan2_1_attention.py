@@ -35,6 +35,38 @@ except ModuleNotFoundError:
 import warnings
 
 
+def _resolve_flash_attention_version(version: Optional[int]) -> Optional[int]:
+    if version in (2, 3):
+        return version
+
+    requested_backend = os.getenv("ATTENTION_BACKEND")
+    if requested_backend == "FA2":
+        if FLASH_ATTN_2_AVAILABLE:
+            return 2
+        if FLASH_ATTN_3_AVAILABLE:
+            warnings.warn(
+                "ATTENTION_BACKEND=FA2 requested, but FA2 is unavailable. Falling back to FA3."
+            )
+            return 3
+        return None
+
+    if requested_backend == "FA3":
+        if FLASH_ATTN_3_AVAILABLE:
+            return 3
+        if FLASH_ATTN_2_AVAILABLE:
+            warnings.warn(
+                "ATTENTION_BACKEND=FA3 requested, but FA3 is unavailable. Falling back to FA2."
+            )
+            return 2
+        return None
+
+    if FLASH_ATTN_2_AVAILABLE:
+        return 2
+    if FLASH_ATTN_3_AVAILABLE:
+        return 3
+    return None
+
+
 def flash_attention(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -69,8 +101,7 @@ def flash_attention(
     """
     if window_size is None:
         window_size = (-1, -1)
-    if version is None:
-        version = 3
+    version = _resolve_flash_attention_version(version)
 
     half_dtypes = (torch.float16, torch.bfloat16)
     assert dtype in half_dtypes
@@ -108,6 +139,7 @@ def flash_attention(
         warnings.warn(
             'Flash attention 3 is not available, use flash attention 2 instead.'
         )
+        version = 2 if FLASH_ATTN_2_AVAILABLE else None
     zeros = torch.zeros([1], dtype=torch.int32, device=q.device)
     cu_seqlens_q = torch.cat([zeros, q_lens]).cumsum(0).to(torch.int32)
     cu_seqlens_k = torch.cat([zeros, k_lens]).cumsum(0).to(torch.int32)
@@ -125,8 +157,11 @@ def flash_attention(
             max_seqlen_k=lk,
             softmax_scale=softmax_scale,
             causal=causal,
-            deterministic=deterministic)[0].unflatten(0, (b, lq))
-    elif FLASH_ATTN_2_AVAILABLE:
+            deterministic=deterministic)
+        if isinstance(x, tuple):
+            x = x[0]
+        x = x.unflatten(0, (b, lq))
+    elif version == 2 and FLASH_ATTN_2_AVAILABLE:
         x = flash_attn.flash_attn_varlen_func(
             q=q,
             k=k,
@@ -141,7 +176,13 @@ def flash_attention(
             window_size=window_size,
             deterministic=deterministic).unflatten(0, (b, lq))
     else:
-        raise ValueError(f"Invalid version: {version}")
+        q = q.unflatten(0, (b, lq)).transpose(1, 2).to(dtype)
+        k = k.unflatten(0, (b, lk)).transpose(1, 2).to(dtype)
+        v = v.unflatten(0, (b, lk)).transpose(1, 2).to(dtype)
+        x = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask=None, is_causal=causal, dropout_p=dropout_p
+        )
+        x = x.transpose(1, 2).contiguous()
 
     # output
     return x.type(out_dtype)
@@ -167,8 +208,12 @@ class AttentionModule(torch.nn.Module):
 
         if os.getenv("ATTENTION_BACKEND") is not None:
             backend = os.getenv("ATTENTION_BACKEND")
-        else:
+        elif FLASH_ATTN_2_AVAILABLE:
             backend = "FA2"
+        elif FLASH_ATTN_3_AVAILABLE:
+            backend = "FA3"
+        else:
+            backend = "torch"
 
         # Check for TensorRT at runtime, not import time
         if os.getenv("ENABLE_TENSORRT", "False").lower() == "true":
@@ -176,8 +221,13 @@ class AttentionModule(torch.nn.Module):
 
         # Fall back to FA backend if TE is specified but not available
         if backend == "TE" and not TRANSFORMER_ENGINE_AVAILABLE:
-            print("Warning: Transformer Engine is not available. Falling back to FA2 backend.")
-            backend = "FA2"
+            print("Warning: Transformer Engine is not available. Falling back to FA backend.")
+            if FLASH_ATTN_2_AVAILABLE:
+                backend = "FA2"
+            elif FLASH_ATTN_3_AVAILABLE:
+                backend = "FA3"
+            else:
+                backend = "torch"
 
         assert backend in ["torch", "FA2", "FA3", "TE", "torch_onnx"]
         self.backend = backend
