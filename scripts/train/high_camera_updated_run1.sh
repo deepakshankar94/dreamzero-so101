@@ -22,9 +22,9 @@ torchrun --nproc_per_node 1 --standalone groot/vla/experiment/experiment.py \
   training_args.deepspeed="groot/vla/configs/deepspeed/zero2.json" \
   save_steps=1000 \
   training_args.warmup_ratio=0.05 \
-  output_dir=/root/dreamzero/checkpoints/dreamzero_high_camera_updated_run1 \
+  output_dir=/root/dreamzero/checkpoints/dreamzero_high_camera_updated_run1_1k_steps \
   per_device_train_batch_size=1 \
-  max_steps=10 \
+  max_steps=1000 \
   weight_decay=1e-5 \
   save_total_limit=5 \
   upload_checkpoints=false \

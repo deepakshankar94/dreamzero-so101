@@ -31,7 +31,7 @@ LOGGER = logging.getLogger(__name__)
 class Args:
     host: str = "0.0.0.0"
     port: int = 8000
-    model_path: str = "/root/dreamzero/checkpoints/dreamzero_high_camera_updated_run1"
+    model_path: str = "/root/dreamzero/checkpoints/dreamzero_high_camera_updated_run1_1k_steps"
     attention_backend: str = "FA2"
     enable_dit_cache: bool = False
     dynamo_recompile_limit: int = 800

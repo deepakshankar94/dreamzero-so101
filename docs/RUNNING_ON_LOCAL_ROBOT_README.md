@@ -15,7 +15,7 @@ This document explains how to run the trained `high_camera_updated` DreamZero mo
 - The trained checkpoint is at:
 
   ```bash
-  /root/dreamzero/checkpoints/dreamzero_high_camera_updated_run1
+  /root/dreamzero/checkpoints/dreamzero_high_camera_updated_run1_1k_steps
   ```
 
 - The GPU server has the DreamZero repo and environment available.
@@ -33,7 +33,7 @@ On the GPU server:
 cd /root/dreamzero
 source .venv/bin/activate
 
-MODEL_PATH=/root/dreamzero/checkpoints/dreamzero_high_camera_updated_run1 \
+MODEL_PATH=/root/dreamzero/checkpoints/dreamzero_high_camera_updated_run1_1k_steps \
 ATTENTION_BACKEND=FA2 \
 ENABLE_DIT_CACHE=true \
 bash /root/dreamzero/scripts/serve/high_camera_updated_server.sh

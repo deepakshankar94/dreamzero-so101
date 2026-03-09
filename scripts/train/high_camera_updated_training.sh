@@ -14,7 +14,7 @@ export HYDRA_FULL_ERROR=1
 
 # ============ CHANGE THESE VARIABLES ============
 HIGH_CAMERA_UPDATED_DATA_ROOT=${HIGH_CAMERA_UPDATED_DATA_ROOT:-"./data/high-camera-updated"}
-OUTPUT_DIR=${OUTPUT_DIR:-"./checkpoints/dreamzero_high_camera_updated_lora"}
+OUTPUT_DIR=${OUTPUT_DIR:-"./checkpoints/dreamzero_high_camera_updated_run1_1k_steps"}
 
 if [ -z "${NUM_GPUS}" ]; then
   NUM_GPUS=$(nvidia-smi -L 2>/dev/null | wc -l)
@@ -69,7 +69,7 @@ torchrun --nproc_per_node $NUM_GPUS --standalone groot/vla/experiment/experiment
     training_args.warmup_ratio=0.05 \
     output_dir=$OUTPUT_DIR \
     per_device_train_batch_size=4 \
-    max_steps=500 \
+    max_steps=1000 \
     weight_decay=1e-5 \
     save_total_limit=5 \
     upload_checkpoints=false \

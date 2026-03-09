@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL_PATH="${MODEL_PATH:-/root/dreamzero/checkpoints/dreamzero_high_camera_updated_run1}"
+MODEL_PATH="${MODEL_PATH:-/root/dreamzero/checkpoints/dreamzero_high_camera_updated_run1_1k_steps}"
 PORT="${PORT:-8000}"
 HOST="${HOST:-0.0.0.0}"
 ATTENTION_BACKEND="${ATTENTION_BACKEND:-FA2}"
