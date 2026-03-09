@@ -34,6 +34,8 @@ class Args:
     model_path: str = "/root/dreamzero/checkpoints/dreamzero_high_camera_updated_run1"
     attention_backend: str = "FA2"
     enable_dit_cache: bool = False
+    dynamo_recompile_limit: int = 800
+    dynamo_cache_size_limit: int = 1000
 
 
 class HighCameraUpdatedPolicy(BasePolicy):
@@ -171,8 +173,14 @@ class HighCameraUpdatedPolicy(BasePolicy):
     def _to_numpy_tree(self, value: Any) -> Any:
         if torch.is_tensor(value):
             return value.detach().cpu().numpy()
+        if isinstance(value, Batch):
+            return {k: self._to_numpy_tree(v) for k, v in value.items()}
         if isinstance(value, dict):
             return {k: self._to_numpy_tree(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._to_numpy_tree(v) for v in value]
+        if isinstance(value, tuple):
+            return tuple(self._to_numpy_tree(v) for v in value)
         return value
 
     def infer(self, obs: dict[str, Any]) -> dict[str, Any]:
@@ -213,6 +221,12 @@ def _init_mesh() -> Any:
 def main(args: Args) -> None:
     os.environ["ATTENTION_BACKEND"] = args.attention_backend
     os.environ["ENABLE_DIT_CACHE"] = "true" if args.enable_dit_cache else "false"
+
+    # These compiled scheduler/update paths specialize on per-step Python ints
+    # such as step_index/order during autoregressive sampling. That creates many
+    # valid graphs even with fixed client-side tensor shapes.
+    torch._dynamo.config.recompile_limit = args.dynamo_recompile_limit
+    torch._dynamo.config.cache_size_limit = args.dynamo_cache_size_limit
 
     device_mesh = _init_mesh()
     rank = dist.get_rank()
