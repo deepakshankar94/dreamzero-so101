@@ -46,15 +46,29 @@ DEFAULT_MOTOR_KEYS = [
 
 def _import_lerobot():
     try:
-        from lerobot.robots import make_robot_from_config, so101_follower
+        from lerobot.robots import make_robot_from_config
+        from lerobot.robots.so_follower import SO101FollowerConfig
         from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 
-        return make_robot_from_config, so101_follower.SO101FollowerConfig, OpenCVCameraConfig
+        return make_robot_from_config, SO101FollowerConfig, OpenCVCameraConfig
     except ImportError:
-        from lerobot.common.robots import make_robot_from_config, so101_follower
-        from lerobot.common.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+        try:
+            from lerobot.robots import make_robot_from_config
+            from lerobot.robots.so101_follower import SO101FollowerConfig
+            from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 
-        return make_robot_from_config, so101_follower.SO101FollowerConfig, OpenCVCameraConfig
+            return make_robot_from_config, SO101FollowerConfig, OpenCVCameraConfig
+        except ImportError:
+            try:
+                from lerobot.robots import make_robot_from_config, so101_follower
+                from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+
+                return make_robot_from_config, so101_follower.SO101FollowerConfig, OpenCVCameraConfig
+            except ImportError:
+                from lerobot.common.robots import make_robot_from_config, so101_follower
+                from lerobot.common.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+
+                return make_robot_from_config, so101_follower.SO101FollowerConfig, OpenCVCameraConfig
 
 
 def _maybe_import_cv2():

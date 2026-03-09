@@ -16,7 +16,6 @@ TASK="${TASK:-pick white cuboid and place on blue notepad}"
 ACTIONS_PER_INFER="${ACTIONS_PER_INFER:-1}"
 ACTION_SLEEP_S="${ACTION_SLEEP_S:-0.10}"
 
-cd /root/dreamzero
 
 python scripts/serve/so101_dreamzero_bridge.py \
   --server-host "$SERVER_HOST" \
