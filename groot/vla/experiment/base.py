@@ -603,6 +603,10 @@ class BaseExperiment(ABC):
         cfg.training_args.run_name = cfg.training_args.output_dir.split("/")[-1]
         print(f"Run name: {cfg.training_args.run_name}")
         training_args = instantiate(cfg.training_args)
+        if cfg.get("save_lora_only", False):
+            # LoRA-only runs should not emit DeepSpeed resume checkpoints, which are full-size
+            # model/optimizer dumps under checkpoint-*/global_step*.
+            training_args.save_only_model = True
         set_seed(training_args.seed)
 
         # Set the environment variables for wandb.
