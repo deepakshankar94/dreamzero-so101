@@ -24,8 +24,8 @@ def main() -> None:
     client = WebsocketClientPolicy(host=args.host, port=args.port)
     print("Server metadata:", client.get_server_metadata())
 
-    overhead = np.zeros((176, 320, 3), dtype=np.uint8)
-    grey_arm = np.zeros((176, 320, 3), dtype=np.uint8)
+    overhead = np.zeros((480, 640, 3), dtype=np.uint8)
+    grey_arm = np.zeros((480, 640, 3), dtype=np.uint8)
     joint_position = np.zeros(5, dtype=np.float32)
     gripper_position = np.zeros(1, dtype=np.float32)
 

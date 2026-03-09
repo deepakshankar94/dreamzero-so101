@@ -225,7 +225,8 @@ def main(args: Args) -> None:
     )
 
     server_config = PolicyServerConfig(
-        image_resolution=(176, 320),
+        # Advertise the raw camera resolution expected by the eval transform.
+        image_resolution=(480, 640),
         needs_wrist_camera=False,
         n_external_cameras=2,
         needs_stereo_camera=False,

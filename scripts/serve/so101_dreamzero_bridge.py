@@ -235,8 +235,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--camera-height", type=int, default=480)
     parser.add_argument("--camera-fps", type=int, default=30)
     parser.add_argument("--resize-before-send", action="store_true")
-    parser.add_argument("--send-width", type=int, default=320)
-    parser.add_argument("--send-height", type=int, default=176)
+    parser.add_argument("--send-width", type=int, default=640)
+    parser.add_argument("--send-height", type=int, default=480)
     parser.add_argument("--task", required=True)
     parser.add_argument("--session-id")
     parser.add_argument(
