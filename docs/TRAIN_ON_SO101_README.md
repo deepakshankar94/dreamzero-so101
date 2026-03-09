@@ -117,16 +117,45 @@ This also writes to:
 
 and now runs for `1000` steps.
 
+### Multi-GPU Full-Dataset Variant
+
+If you want multi-GPU training with full shard sampling, use:
+
+```bash
+bash /root/dreamzero/scripts/train/high_camera_updated_full_dataset_training.sh
+```
+
+Important setting:
+
+```bash
+DATASET_SHARD_SAMPLING_RATE=1.0
+```
+
+This means the loader samples the full cached shard. If you lower it, for example:
+
+```bash
+DATASET_SHARD_SAMPLING_RATE=0.1
+```
+
+the loader only uses 10% of each shard visit, which is faster but reduces coverage for a fixed step budget.
+
+The script prints an approximate raw-data-equivalent pass count based on your current `NUM_GPUS` and `PER_DEVICE_TRAIN_BATCH_SIZE`, then uses that as `MAX_STEPS` by default unless you override it.
+
 ## Step 6: Serve The Trained Model
 
 After training finishes, start the websocket server:
 
 ```bash
-MODEL_PATH=/root/dreamzero/checkpoints/dreamzero_high_camera_updated_run1_1k_steps \
+MODEL_PATH=/root/dreamzero/checkpoints/<your_output_dir> \
 ATTENTION_BACKEND=FA2 \
 ENABLE_DIT_CACHE=true \
 bash /root/dreamzero/scripts/serve/high_camera_updated_server.sh
 ```
+
+Examples:
+
+- `MODEL_PATH=/root/dreamzero/checkpoints/dreamzero_high_camera_updated_run1_1k_steps`
+- `MODEL_PATH=/root/dreamzero/checkpoints/dreamzero_high_camera_updated_full_dataset`
 
 ## Step 7: Smoke Test The Server
 
